@@ -1,0 +1,108 @@
+version: "3.7"
+
+services:
+  redis: 
+    image: redis:latest
+    ports:
+      - 6379:6379
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 30s
+      retries: 50
+      start_period: 1m
+    restart: always
+  
+  postgres:
+    image: postgres:14
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - postgres-db-volume:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 10s
+      retries: 5
+      start_period: 1m
+    restart: always
+    ports:
+      - 5432:5432
+
+  webserver: 
+    image: stack-airflow-ha:0.0.1
+    restart: always
+    depends_on:
+      - postgres
+      - redis
+      - pgbouncer
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/1
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@host.docker.internal:6432/airflow
+    ports:
+      - 8080:8080
+    command: webserver 0.0.0.0
+
+  scheduler: 
+    image: stack-airflow-ha:0.0.1
+    restart: always
+    deploy:
+      replicas: 2
+    depends_on:
+      - webserver
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/1
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@host.docker.internal:6432/airflow
+    command: scheduler 0.0.0.0
+
+  worker: 
+    image: stack-airflow-ha:0.0.1
+    restart: always
+    deploy:
+      replicas: 3
+    depends_on:
+      - scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/1
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@host.docker.internal:6432/airflow
+    command: worker 0.0.0.0
+  
+  triggerer: 
+    image: stack-airflow-ha:0.0.1
+    restart: always
+    deploy:
+      replicas: 1
+    depends_on:
+      - scheduler
+    environment:
+      AIRFLOW__CORE__EXECUTOR: CeleryExecutor
+      AIRFLOW__CELERY__BROKER_URL: redis://redis:6379/1
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@host.docker.internal:6432/airflow
+    command: triggerer 0.0.0.0
+
+  pgbouncer:
+    image: bitnami/pgbouncer:1.19.1
+    restart: always
+    depends_on:
+      - postgres
+    environment:
+      POSTGRESQL_HOST: host.docker.internal
+      POSTGRESQL_USERNAME: airflow
+      POSTGRESQL_PASSWORD: airflow
+      POSTGRESQL_DATABASE: airflow
+      POSTGRESQL_PORT: 5432
+      PGBOUNCER_PORT: 6432
+      PGBOUNCER_DATABASE: airflow
+      PGBOUNCER_BIND_ADDRESS: postgres
+      PGBOUNCER_IGNORE_STARTUP_PARAMETERS: "extra_float_digits"
+      PGBOUNCER_POOL_MODE : "transaction"
+    ports:
+      - 6432:6432
+
+volumes:
+  postgres-db-volume:
+    driver: local
